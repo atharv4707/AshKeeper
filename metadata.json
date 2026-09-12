@@ -1,0 +1,6 @@
+{
+  "name": "Ashkeeper",
+  "description": "A real-life action RPG where daily actions become quests, evolve your Life DNA, and unlock living realms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
