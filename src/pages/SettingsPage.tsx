@@ -15,9 +15,11 @@ import {
 import { useGame } from '../context/GameContext';
 import { sound } from '../utils/sound';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const {
     user,
     soundEnabled,
@@ -46,7 +48,8 @@ export const SettingsPage: React.FC = () => {
 
   const handleLogout = () => {
     sound.playClick();
-    navigate('/login');
+    logout();
+    navigate('/login', { replace: true });
   };
 
   return (

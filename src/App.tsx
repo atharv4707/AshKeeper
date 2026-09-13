@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { GameProvider } from './context/GameContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { GlobalNav } from './components/GlobalNav';
 import { PlayerHUD } from './components/PlayerHUD';
 import { LevelUpModal } from './components/LevelUpModal';
@@ -21,6 +22,25 @@ import { AchievementsPage } from './pages/AchievementsPage';
 import { QuestLogPage } from './pages/QuestLogPage';
 import { ReflectionPage } from './pages/ReflectionPage';
 import { SettingsPage } from './pages/SettingsPage';
+
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: '#F8FAFC', fontWeight: 700 }}>
+        Loading realm session...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  return <>{children}</>;
+};
 
 // Inner layout wrapper that conditionally renders GlobalNav and PlayerHUD
 const AppContent: React.FC = () => {
@@ -69,19 +89,19 @@ const AppContent: React.FC = () => {
               }}
             >
               <Routes>
-                <Route path="/home" element={<HomePage />} />
-                <Route path="/quests" element={<QuestsPage />} />
-                <Route path="/world" element={<WorldPage />} />
-                <Route path="/character" element={<CharacterPage />} />
-                <Route path="/cache" element={<CachePage />} />
-                <Route path="/inventory" element={<InventoryPage />} />
-                <Route path="/network" element={<NetworkPage />} />
-                <Route path="/shared-quest" element={<SharedQuestPage />} />
-                <Route path="/achievements" element={<AchievementsPage />} />
-                <Route path="/quest-log" element={<QuestLogPage />} />
-                <Route path="/who-you-are-becoming" element={<ReflectionPage />} />
-                <Route path="/reflection" element={<ReflectionPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/home" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+                <Route path="/quests" element={<ProtectedRoute><QuestsPage /></ProtectedRoute>} />
+                <Route path="/world" element={<ProtectedRoute><WorldPage /></ProtectedRoute>} />
+                <Route path="/character" element={<ProtectedRoute><CharacterPage /></ProtectedRoute>} />
+                <Route path="/cache" element={<ProtectedRoute><CachePage /></ProtectedRoute>} />
+                <Route path="/inventory" element={<ProtectedRoute><InventoryPage /></ProtectedRoute>} />
+                <Route path="/network" element={<ProtectedRoute><NetworkPage /></ProtectedRoute>} />
+                <Route path="/shared-quest" element={<ProtectedRoute><SharedQuestPage /></ProtectedRoute>} />
+                <Route path="/achievements" element={<ProtectedRoute><AchievementsPage /></ProtectedRoute>} />
+                <Route path="/quest-log" element={<ProtectedRoute><QuestLogPage /></ProtectedRoute>} />
+                <Route path="/who-you-are-becoming" element={<ProtectedRoute><ReflectionPage /></ProtectedRoute>} />
+                <Route path="/reflection" element={<ProtectedRoute><ReflectionPage /></ProtectedRoute>} />
+                <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="*" element={<Navigate to="/home" replace />} />
               </Routes>
             </main>
@@ -104,9 +124,11 @@ const AppContent: React.FC = () => {
 export default function App() {
   return (
     <BrowserRouter>
-      <GameProvider>
-        <AppContent />
-      </GameProvider>
+      <AuthProvider>
+        <GameProvider>
+          <AppContent />
+        </GameProvider>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

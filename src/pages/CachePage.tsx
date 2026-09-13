@@ -19,9 +19,9 @@ export const CachePage: React.FC = () => {
   const { user, items, purchaseItem, equipItem } = useGame();
   const [purchaseNotice, setPurchaseNotice] = useState<{ text: string; isError: boolean } | null>(null);
 
-  const handlePurchase = (item: Item) => {
+  const handlePurchase = async (item: Item) => {
     sound.playClick();
-    const result = purchaseItem(item.id);
+    const result = await purchaseItem(item.id);
     setPurchaseNotice({ text: result.message, isError: !result.success });
     setTimeout(() => {
       setPurchaseNotice(null);

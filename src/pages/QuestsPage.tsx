@@ -16,7 +16,7 @@ import { QuestCreateModal } from '../components/QuestCreateModal';
 import { sound } from '../utils/sound';
 
 export const QuestsPage: React.FC = () => {
-  const { quests, completeQuest, completingFeedback } = useGame();
+  const { quests, completeQuest, completingFeedback, isQuestsLoading, questsError } = useGame();
 
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'DAILY' | 'MAIN' | 'SIDE' | 'EPIC'>('ALL');
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -125,6 +125,29 @@ export const QuestsPage: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {questsError && (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: '10px 14px',
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.45)',
+            borderRadius: 'var(--radius-sm)',
+            color: '#FCA5A5',
+            fontSize: 13,
+            fontWeight: 600
+          }}
+        >
+          {questsError}
+        </div>
+      )}
+
+      {isQuestsLoading && quests.length === 0 && (
+        <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 18 }}>
+          Loading quest journal...
+        </div>
+      )}
 
       {/* Quests Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>

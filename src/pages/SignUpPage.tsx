@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Flame, Eye, EyeOff, Check, ArrowRight } from 'lucide-react';
 import { sound } from '../utils/sound';
+import { ApiClientError } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 export const SignUpPage: React.FC = () => {
   const navigate = useNavigate();
+  const { signup, isAuthenticated } = useAuth();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -15,7 +18,13 @@ export const SignUpPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/home', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     sound.playClick();
 
@@ -27,8 +36,8 @@ export const SignUpPage: React.FC = () => {
       setError('Please enter a valid email address.');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -39,14 +48,19 @@ export const SignUpPage: React.FC = () => {
     setError(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await signup(name.trim(), email.trim(), password);
       setIsSuccess(true);
       sound.playQuestComplete();
       setTimeout(() => {
-        navigate('/home');
+        navigate('/home', { replace: true });
       }, 1200);
-    }, 1000);
+    } catch (err) {
+      const message = err instanceof ApiClientError ? err.message : 'Unable to reach the AshKeeper backend.';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

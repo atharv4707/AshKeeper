@@ -18,6 +18,7 @@ export const QuestCreateModal: React.FC<QuestCreateModalProps> = ({ isOpen, onCl
   const [attribute, setAttribute] = useState<AttributeType>('CRAFT');
   const [difficulty, setDifficulty] = useState<QuestDifficulty>('Medium');
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
@@ -34,25 +35,40 @@ export const QuestCreateModal: React.FC<QuestCreateModalProps> = ({ isOpen, onCl
 
   const { xp, embers } = getRewards(difficulty, category);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+
     if (!title.trim()) {
       setError('Quest title is required.');
       return;
     }
 
-    createQuest({
-      title: title.trim(),
-      description: description.trim() || 'Custom self-directed real world action.',
-      category,
-      attribute,
-      difficulty,
-      xp,
-      embers
-    });
+    if (isSubmitting) {
+      return;
+    }
 
-    sound.playQuestComplete();
-    onClose();
+    setIsSubmitting(true);
+
+    try {
+      await createQuest({
+        title: title.trim(),
+        description: description.trim() || 'Custom self-directed real world action.',
+        category,
+        attribute,
+        difficulty,
+        xp,
+        embers
+      });
+
+      sound.playQuestComplete();
+      onClose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create your quest right now.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -284,9 +300,9 @@ export const QuestCreateModal: React.FC<QuestCreateModalProps> = ({ isOpen, onCl
             <button type="button" onClick={onClose} className="btn-ghost">
               CANCEL
             </button>
-            <button type="submit" className="btn-ember">
+            <button type="submit" className="btn-ember" disabled={isSubmitting || !title.trim()}>
               <Plus size={16} />
-              MANIFEST QUEST
+              {isSubmitting ? 'MANIFESTING...' : 'MANIFEST QUEST'}
             </button>
           </div>
         </form>

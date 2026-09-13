@@ -4,7 +4,32 @@ import { useGame } from '../context/GameContext';
 import { sound } from '../utils/sound';
 
 export const PlayerHUD: React.FC = () => {
-  const { user, soundEnabled, toggleSound } = useGame();
+  const { user, soundEnabled, toggleSound, isPlayerLoading } = useGame();
+
+  if (isPlayerLoading) {
+    return (
+      <header
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 80,
+          height: 56,
+          background: 'rgba(7, 9, 14, 0.85)',
+          borderBottom: '1px solid var(--border-subtle)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#F8FAFC',
+          fontFamily: 'var(--font-display)',
+          fontWeight: 700,
+          letterSpacing: '0.08em'
+        }}
+      >
+        LOADING PLAYER STATE...
+      </header>
+    );
+  }
+
   const xpPercent = Math.min(100, Math.round((user.xp / user.xpMax) * 100));
 
   return (

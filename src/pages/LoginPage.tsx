@@ -2,36 +2,47 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Flame, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { sound } from '../utils/sound';
+import { ApiClientError } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
+  const { login, isAuthenticated } = useAuth();
 
-  const [email, setEmail] = useState('atharv4707@gmail.com');
-  const [password, setPassword] = useState('••••••••••');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/home', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     sound.playClick();
 
-    if (!email || !password) {
+    if (!email.trim() || !password) {
       setError('Please provide valid credentials.');
       return;
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      sound.playQuestComplete();
-      navigate('/home');
-    }, 700);
-  };
+    setError(null);
 
-  const handleGuestLogin = () => {
-    sound.playClick();
-    navigate('/home');
+    try {
+      await login(email.trim(), password);
+      sound.playQuestComplete();
+      navigate('/home', { replace: true });
+    } catch (err) {
+      const message = err instanceof ApiClientError ? err.message : 'Unable to reach the AshKeeper backend.';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -248,17 +259,6 @@ export const LoginPage: React.FC = () => {
             <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
           </div>
 
-          <button
-            onClick={handleGuestLogin}
-            className="btn-ghost"
-            style={{
-              width: '100%',
-              padding: '12px',
-              fontSize: 13
-            }}
-          >
-            ENTER AS DEMO PLAYER (ATHARV LV. 07)
-          </button>
         </div>
       </div>
 

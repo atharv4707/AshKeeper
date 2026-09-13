@@ -16,7 +16,33 @@ import { LifeDNAVisualizer } from '../components/LifeDNAVisualizer';
 import { sound } from '../utils/sound';
 
 export const CharacterPage: React.FC = () => {
-  const { user, attributes, archetype, items, equipItem } = useGame();
+  const { user, attributes, archetype, items, equipItem, isPlayerLoading, playerError, refreshPlayerState } = useGame();
+
+  if (isPlayerLoading) {
+    return (
+      <div style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
+        <div className="hud-glass-panel" style={{ padding: '24px 32px', color: '#F8FAFC', fontWeight: 700 }}>
+          Loading character profile...
+        </div>
+      </div>
+    );
+  }
+
+  if (playerError) {
+    return (
+      <div style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
+        <div className="hud-glass-panel" style={{ padding: '24px 32px', color: '#F8FAFC', maxWidth: 520 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 12, color: '#FF9E40' }}>
+            PLAYER STATE ERROR
+          </div>
+          <div style={{ marginBottom: 18 }}>{playerError}</div>
+          <button className="btn-ember" onClick={() => void refreshPlayerState()}>
+            RETRY
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const [inspectedSlot, setInspectedSlot] = useState<string | null>(null);
 

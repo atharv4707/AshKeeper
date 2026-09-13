@@ -26,11 +26,40 @@ export const HomePage: React.FC = () => {
     quests,
     archetype,
     completeQuest,
-    completingFeedback
+    completingFeedback,
+    isPlayerLoading,
+    playerError,
+    refreshPlayerState
   } = useGame();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedAttributeHover, setSelectedAttributeHover] = useState<string | null>(null);
+
+  if (isPlayerLoading) {
+    return (
+      <div style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
+        <div className="hud-glass-panel" style={{ padding: '24px 32px', color: '#F8FAFC', fontWeight: 700 }}>
+          Loading your real player state...
+        </div>
+      </div>
+    );
+  }
+
+  if (playerError) {
+    return (
+      <div style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
+        <div className="hud-glass-panel" style={{ padding: '24px 32px', color: '#F8FAFC', maxWidth: 520 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 12, color: '#FF9E40' }}>
+            PLAYER STATE ERROR
+          </div>
+          <div style={{ marginBottom: 18 }}>{playerError}</div>
+          <button className="btn-ember" onClick={() => void refreshPlayerState()}>
+            RETRY
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Active uncompleted quests (limit to 4 for clean hub display)
   const activeQuests = quests.filter(q => !q.completed).slice(0, 4);

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   User,
@@ -12,18 +12,19 @@ import {
   ArchetypeInfo,
   AttributeType
 } from '../types';
-import {
-  INITIAL_USER,
-  INITIAL_ATTRIBUTES,
-  INITIAL_QUESTS,
-  INITIAL_ITEMS,
-  REALMS,
-  SHARED_QUEST_DATA,
-  ACHIEVEMENTS_DATA,
-  ACTIVITY_LOGS,
-  getArchetypeFromStats
-} from '../data/mockData';
 import { sound } from '../utils/sound';
+import { useAuth } from './AuthContext';
+import { achievementApi, cacheApi, inventoryApi, networkApi, playerApi, questApi, questLogApi, settingsApi, worldApi } from '../lib/api';
+import type {
+  AchievementResponse,
+  ItemResponse,
+  NetworkResponse,
+  PlayerProfileResponse,
+  ProgressionResponse,
+  QuestLogEntry,
+  QuestResponse,
+  RealmResponse,
+} from '../types/api';
 
 interface LevelUpInfo {
   oldLevel: number;
@@ -52,9 +53,14 @@ interface GameContextType {
   completingFeedback: QuestCompleteFeedback | null;
   soundEnabled: boolean;
   reducedMotion: boolean;
-  completeQuest: (questId: string) => void;
-  createQuest: (quest: Omit<Quest, 'id' | 'completed'>) => void;
-  purchaseItem: (itemId: string) => { success: boolean; message: string };
+  isPlayerLoading: boolean;
+  playerError: string | null;
+  isQuestsLoading: boolean;
+  questsError: string | null;
+  refreshPlayerState: () => Promise<void>;
+  completeQuest: (questId: string) => Promise<void>;
+  createQuest: (quest: Omit<Quest, 'id' | 'completed'>) => Promise<void>;
+  purchaseItem: (itemId: string) => Promise<{ success: boolean; message: string }>;
   equipItem: (itemId: string) => void;
   joinSharedQuest: () => void;
   contributeSharedQuest: () => void;
@@ -64,24 +70,280 @@ interface GameContextType {
   resetProgress: () => void;
 }
 
+const DEFAULT_ARCHETYPE: ArchetypeInfo = {
+  name: 'THE BALANCED',
+  title: 'The Harmonious Avatar',
+  subtitle: 'Harmonious equilibrium across all pillars.',
+  description: 'Your structure is settling into alignment.',
+  dominantStat: 'BALANCED',
+  color: '#FBBF24',
+  quote: 'True power is symmetry.'
+};
+
+const mapRegionToRealm = (realm: RealmResponse): Realm => ({
+  id: realm.id,
+  name: realm.name,
+  title: realm.title,
+  attribute: (realm.attribute as Realm['attribute']) || 'ALL',
+  levelReq: realm.level_requirement,
+  unlocked: realm.unlocked,
+  progress: 0,
+  description: realm.description,
+  lore: realm.lore,
+  image: realm.image || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
+  availableQuests: [],
+  rewards: realm.title,
+  coordinates: { x: realm.coordinates_x, y: realm.coordinates_y },
+});
+
+const mapAchievementResponseToAchievement = (achievement: AchievementResponse): Achievement => ({
+  id: achievement.id,
+  title: achievement.title,
+  description: achievement.description,
+  icon: achievement.category === 'Progression' ? 'Trophy' : achievement.category === 'Consistency' ? 'Flame' : achievement.category === 'Attributes' ? 'Sparkles' : 'Cpu',
+  progress: achievement.progress,
+  maxProgress: achievement.max_progress,
+  unlocked: achievement.unlocked,
+  rewardEmbers: achievement.ember_reward,
+  category: (achievement.category as Achievement['category']) || 'Progression',
+});
+
+const mapNetworkSharedQuest = (data: NetworkResponse | null): SharedQuest => ({
+  id: data?.shared_quest?.id ?? 'shared-quest-0',
+  title: data?.shared_quest?.title ?? 'THE BUILDERS\' RUN',
+  description: data?.shared_quest?.description ?? 'A cooperative multi-day expedition to manifest a shared prototype.',
+  objective: data?.shared_quest?.objective ?? 'Build something deliberate for five consecutive days.',
+  players: (data?.shared_quest?.players ?? []).map((player) => ({
+    name: player.name,
+    avatar: player.avatar || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
+    level: player.level,
+    archetype: player.archetype,
+    contribution: player.contribution,
+  })),
+  progressPercent: data?.shared_quest?.progress_percent ?? 0,
+  targetDays: data?.shared_quest?.target_days ?? 5,
+  currentDay: data?.shared_quest?.current_day ?? 1,
+  rewards: {
+    xp: data?.shared_quest?.reward_xp ?? 500,
+    embers: data?.shared_quest?.reward_embers ?? 200,
+  },
+  isJoined: (data?.shared_quest?.players ?? []).some((player) => player.name.toLowerCase().includes('ash') || player.name.toLowerCase().includes('keeper')),
+});
+
+const mapQuestLogEntryToLog = (entry: QuestLogEntry): ActivityLogItem => ({
+  id: entry.id,
+  dateLabel: (entry.date_label as ActivityLogItem['dateLabel']) || 'TODAY',
+  title: entry.title,
+  category: entry.category,
+  xp: entry.xp_awarded,
+  embers: entry.embers_awarded,
+  attributeChange: {
+    attribute: (entry.attribute_awarded as AttributeType) || 'CRAFT',
+    value: entry.attribute_gain,
+  },
+  isMilestone: entry.is_milestone,
+  milestoneTitle: entry.is_milestone ? `${entry.title} // MILESTONE` : undefined,
+  timestamp: entry.timestamp || entry.completed_at,
+});
+
+const mapProfileToUser = (profile: PlayerProfileResponse): User => ({
+  id: profile.user_id,
+  name: profile.username,
+  email: profile.email,
+  level: profile.level,
+  xp: profile.current_xp,
+  xpMax: profile.xp_max,
+  embers: profile.embers,
+  combo: profile.combo,
+  avatar: profile.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+  title: profile.title || profile.archetype,
+  joinedDate: profile.joined_date
+});
+
+const mapProfileToAttributes = (profile: PlayerProfileResponse): Attributes => ({
+  craft: profile.craft,
+  focus: profile.focus,
+  vigor: profile.vigor,
+  will: profile.will
+});
+
+const mapProfileToArchetype = (profile: PlayerProfileResponse): ArchetypeInfo => {
+  const info = profile.archetype_info;
+  const dominantStat = profile.archetype === 'THE BUILDER'
+    ? 'CRAFT'
+    : profile.archetype === 'THE SCHOLAR'
+      ? 'FOCUS'
+      : profile.archetype === 'THE WARRIOR'
+        ? 'VIGOR'
+        : profile.archetype === 'THE KEEPER'
+          ? 'WILL'
+          : 'BALANCED';
+
+  return {
+    name: info?.name ?? profile.archetype,
+    title: info?.next_archetype ?? profile.archetype,
+    subtitle: info?.description ?? 'Your current path is consolidating.',
+    description: info?.description ?? 'Your current path is consolidating.',
+    dominantStat,
+    color: info?.color ?? '#FF9E40',
+    quote: info?.next_archetype_tip ?? 'Quiet consistency compounds.'
+  };
+};
+
+const mapQuestResponseToQuest = (quest: QuestResponse): Quest => ({
+  id: quest.id,
+  title: quest.title,
+  description: quest.description ?? '',
+  category: quest.category as 'DAILY' | 'MAIN' | 'SIDE' | 'EPIC',
+  attribute: quest.attribute as AttributeType,
+  difficulty: quest.difficulty as 'Easy' | 'Medium' | 'Hard' | 'Legendary',
+  xp: quest.xp_reward,
+  embers: quest.ember_reward,
+  completed: quest.status === 'COMPLETED',
+  completedAt: quest.completed_at ?? undefined,
+  isCustom: quest.quest_type === 'CUSTOM'
+});
+
+const mapItemResponseToItem = (item: ItemResponse): Item => ({
+  id: item.id,
+  name: item.name,
+  rarity: item.rarity as Item['rarity'],
+  price: item.price,
+  description: item.description,
+  lore: item.lore,
+  effect: item.effect,
+  slot: item.slot as Item['slot'],
+  icon: item.icon ?? 'Sparkles',
+  owned: item.owned,
+  equipped: item.equipped,
+  locked: item.locked,
+  requiredLevel: item.level_requirement > 1 ? item.level_requirement : undefined,
+  buff: {
+    stat: item.stat === 'craft' ? 'craft' : item.stat === 'focus' ? 'focus' : item.stat === 'vigor' ? 'vigor' : item.stat === 'will' ? 'will' : item.stat === 'xp' ? 'xp' : item.stat === 'combo' ? 'combo' : 'all',
+    value: item.stat_value
+  }
+});
+
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User>(INITIAL_USER);
-  const [attributes, setAttributes] = useState<Attributes>(INITIAL_ATTRIBUTES);
-  const [quests, setQuests] = useState<Quest[]>(INITIAL_QUESTS);
-  const [items, setItems] = useState<Item[]>(INITIAL_ITEMS);
-  const [realms, setRealms] = useState<Realm[]>(REALMS);
-  const [sharedQuest, setSharedQuest] = useState<SharedQuest>(SHARED_QUEST_DATA);
-  const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS_DATA);
-  const [logs, setLogs] = useState<ActivityLogItem[]>(ACTIVITY_LOGS);
+  const { token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const [user, setUser] = useState<User>({
+    id: '', name: '', email: '', level: 1, xp: 0, xpMax: 100, embers: 0, combo: 0, avatar: '', title: 'THE BALANCED', joinedDate: ''
+  });
+  const [baseAttributes, setBaseAttributes] = useState<Attributes>({ craft: 10, focus: 10, vigor: 10, will: 10 });
+  const [attributes, setAttributes] = useState<Attributes>({ craft: 10, focus: 10, vigor: 10, will: 10 });
+  const [quests, setQuests] = useState<Quest[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
+  const [realms, setRealms] = useState<Realm[]>([]);
+  const [sharedQuest, setSharedQuest] = useState<SharedQuest>({
+    id: 'shared-quest-0', title: 'THE BUILDERS\' RUN', description: 'A cooperative multi-day expedition to manifest a shared prototype.', objective: 'Build something deliberate for five consecutive days.', players: [], progressPercent: 0, targetDays: 5, currentDay: 1, rewards: { xp: 500, embers: 200 }, isJoined: false,
+  });
+  const [achievements, setAchievements] = useState<Achievement[]>([]);
+  const [logs, setLogs] = useState<ActivityLogItem[]>([]);
   const [levelUpInfo, setLevelUpInfo] = useState<LevelUpInfo | null>(null);
   const [completingFeedback, setCompletingFeedback] = useState<QuestCompleteFeedback | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
+  const [isPlayerLoading, setIsPlayerLoading] = useState(true);
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  const [isQuestsLoading, setIsQuestsLoading] = useState(false);
+  const [questsError, setQuestsError] = useState<string | null>(null);
+  const [archetype, setArchetype] = useState<ArchetypeInfo>(DEFAULT_ARCHETYPE);
 
-  // Derive Archetype dynamically from current stats
-  const archetype = getArchetypeFromStats(attributes);
+  const calculateDisplayedAttributes = useCallback((sourceItems: Item[], sourceBase: Attributes) => {
+    const display: Attributes = { ...sourceBase };
+
+    sourceItems.forEach(item => {
+      if (!item.equipped || !item.buff) return;
+      if (item.buff.stat === 'craft') display.craft += item.buff.value;
+      if (item.buff.stat === 'focus') display.focus += item.buff.value;
+      if (item.buff.stat === 'vigor') display.vigor += item.buff.value;
+      if (item.buff.stat === 'will') display.will += item.buff.value;
+    });
+
+    return display;
+  }, []);
+
+  const refreshPlayerState = useCallback(async () => {
+    if (!token) {
+      setIsPlayerLoading(false);
+      setPlayerError(null);
+      return;
+    }
+
+    setIsPlayerLoading(true);
+    setPlayerError(null);
+
+    try {
+      const [profile, cacheItems, worldItems, achievementItems, networkData, logItems] = await Promise.all([
+        playerApi.profile(token),
+        cacheApi.items(token),
+        worldApi.list(token),
+        achievementApi.list(token),
+        networkApi.list(token),
+        questLogApi.list(token),
+      ]);
+
+      const nextBaseAttributes = mapProfileToAttributes(profile);
+      const nextItems = cacheItems.map(mapItemResponseToItem);
+      const nextUser = mapProfileToUser(profile);
+      const nextRealms = worldItems.map(mapRegionToRealm);
+
+      setUser(nextUser);
+      setBaseAttributes(nextBaseAttributes);
+      setAttributes(calculateDisplayedAttributes(nextItems, nextBaseAttributes));
+      setArchetype(mapProfileToArchetype(profile));
+      setItems(nextItems);
+      setRealms(nextRealms);
+      setAchievements(achievementItems.map(mapAchievementResponseToAchievement));
+      setSharedQuest(mapNetworkSharedQuest(networkData));
+      setLogs(logItems.map(mapQuestLogEntryToLog));
+    } catch (error) {
+      console.error('Failed to load player profile:', error);
+      setPlayerError('Unable to load your player state. Please retry.');
+    } finally {
+      setIsPlayerLoading(false);
+    }
+  }, [calculateDisplayedAttributes, token]);
+
+  const refreshQuestState = useCallback(async () => {
+    if (!token) {
+      setQuests([]);
+      setQuestsError(null);
+      return;
+    }
+
+    setIsQuestsLoading(true);
+    setQuestsError(null);
+
+    try {
+      const questList = await questApi.list(token);
+      setQuests(questList.map(mapQuestResponseToQuest));
+    } catch (error) {
+      console.error('Failed to load quests:', error);
+      setQuests([]);
+      const message = error instanceof Error ? error.message : 'Unable to load your quests.';
+      setQuestsError(message);
+    } finally {
+      setIsQuestsLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+
+    if (!isAuthenticated || !token) {
+      setPlayerError(null);
+      setIsPlayerLoading(false);
+      setQuests([]);
+      return;
+    }
+
+    void refreshPlayerState();
+    void refreshQuestState();
+  }, [isAuthLoading, isAuthenticated, token, refreshPlayerState, refreshQuestState]);
+
 
   const toggleSound = () => {
     const next = !soundEnabled;
@@ -94,72 +356,60 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setReducedMotion(!reducedMotion);
   };
 
-  const completeQuest = (questId: string) => {
+  const completeQuest = async (questId: string) => {
+    if (!token) return;
+
     const targetQuest = quests.find(q => q.id === questId);
     if (!targetQuest || targetQuest.completed) return;
 
-    sound.playQuestComplete();
+    try {
+      const result = await questApi.complete(questId, token);
+      sound.playQuestComplete();
 
-    // Trigger feedback particle / floating numbers
-    setCompletingFeedback({
-      questId,
-      xpGain: targetQuest.xp,
-      emberGain: targetQuest.embers,
-      attribute: targetQuest.attribute
-    });
+      setCompletingFeedback({
+        questId,
+        xpGain: result.rewards.xp,
+        emberGain: result.rewards.embers,
+        attribute: Object.keys(result.attribute_change)[0]?.toUpperCase() as AttributeType || targetQuest.attribute
+      });
 
-    setTimeout(() => {
-      setCompletingFeedback(null);
-    }, 2000);
+      setTimeout(() => {
+        setCompletingFeedback(null);
+      }, 2000);
 
-    // Update quest status
-    setQuests(prev =>
-      prev.map(q => (q.id === questId ? { ...q, completed: true, completedAt: 'Just now' } : q))
-    );
+      setQuests(prev => prev.map(q => (q.id === questId ? mapQuestResponseToQuest(result.quest) : q)));
 
-    // Increment corresponding attribute
-    const attrKey = targetQuest.attribute.toLowerCase() as keyof Attributes;
-    setAttributes(prev => ({
-      ...prev,
-      [attrKey]: prev[attrKey] + 2
-    }));
+      const attributeKey = Object.keys(result.attribute_change)[0]?.toLowerCase() as keyof Attributes | undefined;
+      if (attributeKey) {
+        const nextBase = {
+          ...baseAttributes,
+          [attributeKey]: baseAttributes[attributeKey] + Number(result.attribute_change[attributeKey] ?? 0)
+        } as Attributes;
+        setBaseAttributes(nextBase);
+        setAttributes(calculateDisplayedAttributes(items, nextBase));
+      }
 
-    // Update log
-    const newLogItem: ActivityLogItem = {
-      id: `log-${Date.now()}`,
-      dateLabel: 'TODAY',
-      title: targetQuest.title,
-      category: targetQuest.attribute,
-      xp: targetQuest.xp,
-      embers: targetQuest.embers,
-      attributeChange: { attribute: targetQuest.attribute, value: 2 },
-      timestamp: 'Just now'
-    };
-    setLogs(prev => [newLogItem, ...prev]);
+      setUser(prev => ({
+        ...prev,
+        level: result.player.level,
+        xp: result.player.current_xp,
+        xpMax: result.player.xp_max,
+        embers: result.player.embers,
+        combo: result.player.combo,
+        title: result.player.archetype,
+      }));
 
-    // Check user XP & potential Level Up
-    setUser(prevUser => {
-      const nextXp = prevUser.xp + targetQuest.xp;
-      const nextEmbers = prevUser.embers + targetQuest.embers;
+      setArchetype({
+        name: result.player.archetype_info.name,
+        title: result.player.archetype_info.next_archetype,
+        subtitle: result.player.archetype_info.description,
+        description: result.player.archetype_info.description,
+        dominantStat: result.player.archetype === 'THE BUILDER' ? 'CRAFT' : result.player.archetype === 'THE SCHOLAR' ? 'FOCUS' : result.player.archetype === 'THE WARRIOR' ? 'VIGOR' : result.player.archetype === 'THE KEEPER' ? 'WILL' : 'BALANCED',
+        color: result.player.archetype_info.color,
+        quote: result.player.archetype_info.next_archetype_tip
+      });
 
-      if (nextXp >= prevUser.xpMax) {
-        const newLevel = prevUser.level + 1;
-        const remainderXp = nextXp - prevUser.xpMax;
-        const newXpMax = Math.round(prevUser.xpMax * 1.25);
-
-        // Check unlocked realms
-        let newlyUnlocked: string | undefined = undefined;
-        setRealms(prevRealms =>
-          prevRealms.map(r => {
-            if (!r.unlocked && newLevel >= r.levelReq) {
-              newlyUnlocked = r.name;
-              return { ...r, unlocked: true };
-            }
-            return r;
-          })
-        );
-
-        // Play level up effects
+      if (result.level_up) {
         setTimeout(() => {
           sound.playLevelUp();
           if (!reducedMotion) {
@@ -171,125 +421,143 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
           }
           setLevelUpInfo({
-            oldLevel: prevUser.level,
-            newLevel,
-            unlockedRealmName: newlyUnlocked || (newLevel === 8 ? 'THE TEMPLE' : undefined)
+            oldLevel: result.player.level - result.levels_gained,
+            newLevel: result.player.level,
+            unlockedRealmName: result.unlocked_realms[0]
           });
         }, 500);
-
-        return {
-          ...prevUser,
-          level: newLevel,
-          xp: remainderXp,
-          xpMax: newXpMax,
-          embers: nextEmbers,
-          combo: prevUser.combo + 1
-        };
       }
 
-      return {
-        ...prevUser,
-        xp: nextXp,
-        embers: nextEmbers
+      const newLogItem: ActivityLogItem = {
+        id: `log-${Date.now()}`,
+        dateLabel: 'TODAY',
+        title: targetQuest.title,
+        category: targetQuest.attribute,
+        xp: result.rewards.xp,
+        embers: result.rewards.embers,
+        attributeChange: { attribute: targetQuest.attribute, value: Number(Object.values(result.attribute_change)[0] ?? 0) },
+        timestamp: 'Just now'
       };
-    });
+      setLogs(prev => [newLogItem, ...prev]);
+
+      await refreshPlayerState();
+      await refreshQuestState();
+    } catch (error) {
+      console.error('Failed to complete quest:', error);
+    }
   };
 
-  const createQuest = (newQuestData: Omit<Quest, 'id' | 'completed'>) => {
+  const createQuest = async (newQuestData: Omit<Quest, 'id' | 'completed'>) => {
+    if (!token) return;
+
     sound.playClick();
-    const newQuest: Quest = {
-      ...newQuestData,
-      id: `custom-quest-${Date.now()}`,
-      completed: false,
-      isCustom: true
-    };
-    setQuests(prev => [newQuest, ...prev]);
+
+    try {
+      const createdQuest = await questApi.create({
+        title: newQuestData.title,
+        description: newQuestData.description,
+        category: newQuestData.category,
+        attribute: newQuestData.attribute,
+        difficulty: newQuestData.difficulty,
+      }, token);
+
+      setQuests(prev => [mapQuestResponseToQuest(createdQuest), ...prev]);
+      await refreshQuestState();
+    } catch (error) {
+      console.error('Failed to create quest:', error);
+      const message = error instanceof Error ? error.message : 'Unable to create your quest.';
+      throw new Error(message);
+    }
   };
 
-  const purchaseItem = (itemId: string): { success: boolean; message: string } => {
+  const purchaseItem = async (itemId: string): Promise<{ success: boolean; message: string }> => {
+    if (!token) {
+      return { success: false, message: 'Please log in to acquire this relic.' };
+    }
+
     const targetItem = items.find(i => i.id === itemId);
     if (!targetItem) return { success: false, message: 'Item not found' };
     if (targetItem.owned) return { success: false, message: 'Item already owned' };
 
-    if (user.embers < targetItem.price) {
-      return { success: false, message: 'NOT ENOUGH EMBERS. Complete more real-life quests.' };
+    try {
+      const result = await cacheApi.purchase(itemId, token);
+      sound.playPurchase();
+
+      setUser(prev => ({ ...prev, embers: result.new_embers }));
+      setItems(prev => prev.map(item => (item.id === itemId ? mapItemResponseToItem(result.item) : item)));
+      setLogs(prev => [
+        {
+          id: `log-buy-${Date.now()}`,
+          dateLabel: 'TODAY',
+          title: `Acquired ${result.item.name}`,
+          category: 'Cache',
+          xp: 0,
+          embers: -result.item.price,
+          isMilestone: true,
+          milestoneTitle: `RELIC ACQUIRED: ${result.item.name.toUpperCase()}`,
+          timestamp: 'Just now'
+        },
+        ...prev
+      ]);
+
+      return { success: true, message: result.message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to complete this purchase.';
+      return { success: false, message };
     }
-
-    sound.playPurchase();
-
-    // Deduct embers
-    setUser(prev => ({ ...prev, embers: prev.embers - targetItem.price }));
-
-    // Set owned
-    setItems(prev =>
-      prev.map(item => (item.id === itemId ? { ...item, owned: true } : item))
-    );
-
-    // Add to log
-    setLogs(prev => [
-      {
-        id: `log-buy-${Date.now()}`,
-        dateLabel: 'TODAY',
-        title: `Acquired ${targetItem.name}`,
-        category: 'Cache',
-        xp: 20,
-        embers: -targetItem.price,
-        isMilestone: true,
-        milestoneTitle: `RELIC ACQUIRED: ${targetItem.name.toUpperCase()}`,
-        timestamp: 'Just now'
-      },
-      ...prev
-    ]);
-
-    return { success: true, message: `Acquired ${targetItem.name}` };
   };
 
-  const equipItem = (itemId: string) => {
+  const equipItem = async (itemId: string) => {
     const target = items.find(i => i.id === itemId);
     if (!target || !target.owned) return;
 
-    sound.playEquip();
+    try {
+      const response = target.equipped
+        ? await inventoryApi.unequip(itemId, token)
+        : await inventoryApi.equip(itemId, token);
 
-    setItems(prev =>
-      prev.map(item => {
-        if (item.id === itemId) {
-          const nextEquipped = !item.equipped;
-          // Apply/remove stat buff
-          if (target.buff.stat in attributes) {
-            const statKey = target.buff.stat as keyof Attributes;
-            setAttributes(a => ({
-              ...a,
-              [statKey]: nextEquipped ? a[statKey] + target.buff.value : Math.max(10, a[statKey] - target.buff.value)
-            }));
+      sound.playEquip();
+
+      setItems(prev => {
+        const nextItems = prev.map(item => {
+          if (item.id === itemId) {
+            return { ...item, equipped: response.equipped };
           }
-          return { ...item, equipped: nextEquipped };
-        }
-        // If same slot and we are equipping, unequip others in same slot
-        if (item.slot === target.slot && item.id !== itemId && !target.equipped) {
-          return { ...item, equipped: false };
-        }
-        return item;
-      })
-    );
+          if (item.slot === target.slot && response.equipped && item.id !== itemId) {
+            return { ...item, equipped: false };
+          }
+          return item;
+        });
+        setAttributes(calculateDisplayedAttributes(nextItems, baseAttributes));
+        return nextItems;
+      });
+    } catch (error) {
+      console.error('Failed to update equipment state:', error);
+      const message = error instanceof Error ? error.message : 'Unable to update equipment.';
+      window.alert(message);
+    }
   };
 
-  const joinSharedQuest = () => {
+  const joinSharedQuest = async () => {
+    if (!token || !sharedQuest.id || sharedQuest.id === 'shared-quest-0') return;
     sound.playClick();
-    setSharedQuest(prev => ({ ...prev, isJoined: true }));
+    try {
+      await networkApi.joinSharedQuest(sharedQuest.id, token);
+      await refreshPlayerState();
+    } catch (error) {
+      console.error('Failed to join shared quest:', error);
+    }
   };
 
-  const contributeSharedQuest = () => {
+  const contributeSharedQuest = async () => {
+    if (!token || !sharedQuest.id || sharedQuest.id === 'shared-quest-0') return;
     sound.playQuestComplete();
-    setSharedQuest(prev => ({
-      ...prev,
-      progressPercent: Math.min(100, prev.progressPercent + 8),
-      players: prev.players.map((p, idx) => (idx === 0 ? { ...p, contribution: p.contribution + 6 } : p))
-    }));
-    setUser(prev => ({
-      ...prev,
-      xp: prev.xp + 40,
-      embers: prev.embers + 15
-    }));
+    try {
+      await networkApi.contributeSharedQuest(sharedQuest.id, token);
+      await refreshPlayerState();
+    } catch (error) {
+      console.error('Failed to contribute to shared quest:', error);
+    }
   };
 
   const closeLevelUpModal = () => {
@@ -298,13 +566,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const resetProgress = () => {
-    setUser(INITIAL_USER);
-    setAttributes(INITIAL_ATTRIBUTES);
-    setQuests(INITIAL_QUESTS);
-    setItems(INITIAL_ITEMS);
-    setRealms(REALMS);
-    setSharedQuest(SHARED_QUEST_DATA);
-    setLogs(ACTIVITY_LOGS);
+    setUser({
+      id: '', name: '', email: '', level: 1, xp: 0, xpMax: 100, embers: 0, combo: 0, avatar: '', title: 'THE BALANCED', joinedDate: ''
+    });
+    setBaseAttributes({ craft: 10, focus: 10, vigor: 10, will: 10 });
+    setAttributes({ craft: 10, focus: 10, vigor: 10, will: 10 });
+    setQuests([]);
+    setItems([]);
+    setRealms([]);
+    setSharedQuest({
+      id: 'shared-quest-0', title: 'THE BUILDERS\' RUN', description: 'A cooperative multi-day expedition to manifest a shared prototype.', objective: 'Build something deliberate for five consecutive days.', players: [], progressPercent: 0, targetDays: 5, currentDay: 1, rewards: { xp: 500, embers: 200 }, isJoined: false,
+    });
+    setLogs([]);
     sound.playClick();
   };
 
@@ -324,6 +597,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         completingFeedback,
         soundEnabled,
         reducedMotion,
+        isPlayerLoading,
+        playerError,
+        isQuestsLoading,
+        questsError,
+        refreshPlayerState,
         completeQuest,
         createQuest,
         purchaseItem,

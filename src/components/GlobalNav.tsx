@@ -20,9 +20,36 @@ import { useGame } from '../context/GameContext';
 import { sound } from '../utils/sound';
 
 export const GlobalNav: React.FC = () => {
-  const { user, archetype } = useGame();
+  const { user, archetype, isPlayerLoading } = useGame();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  if (isPlayerLoading) {
+    return (
+      <aside
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          bottom: 0,
+          width: 240,
+          zIndex: 90,
+          background: 'rgba(9, 13, 20, 0.94)',
+          borderRight: '1px solid var(--border-subtle)',
+          padding: '24px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#F8FAFC',
+          fontFamily: 'var(--font-display)',
+          fontWeight: 700,
+          letterSpacing: '0.08em'
+        }}
+      >
+        LOADING PLAYER...
+      </aside>
+    );
+  }
 
   const mainNavLinks = [
     { to: '/home', label: 'HOME', icon: Compass },
